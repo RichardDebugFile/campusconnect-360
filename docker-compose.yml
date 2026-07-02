@@ -1,0 +1,170 @@
+# =============================================================================
+# CampusConnect 360 - Orquestación completa del ecosistema
+# -----------------------------------------------------------------------------
+# Levanta TODO el ecosistema con un único comando:  docker compose up --build
+#
+# Topología:
+#   - rabbitmq      : broker de mensajería (topic exchange + DLX)  -> :15672 UI
+#   - postgres      : un clúster con 5 bases separadas (una por servicio)
+#   - academic      : Servicio Académico            (:3001)
+#   - payments      : Servicio de Pagos             (:3002)
+#   - attendance    : Servicio de Asistencia/Bienestar (:3003)
+#   - notifications : Servicio de Notificaciones    (:3004)
+#   - analytics     : Servicio de Analítica (CQRS)  (:3005)
+#   - gateway       : API Gateway + JWT             (:8080)  <- entrada única
+#   - frontend      : Nginx sirve los 4 portales    (:8090)
+#
+# Los puertos de los microservicios se exponen al host SOLO para depuración
+# (Swagger, /health). El tráfico "real" de los frontends entra por el gateway.
+# =============================================================================
+
+services:
+  # ------------------------------------------------------------------ infra ---
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: cc-rabbitmq
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"     # protocolo AMQP
+      - "15672:15672"   # consola de administración (guest/guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [campusnet]
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: cc-postgres
+    environment:
+      POSTGRES_USER: campus
+      POSTGRES_PASSWORD: campus
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      # crea las 5 bases al primer arranque
+      - ./infra/postgres/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U campus -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [campusnet]
+
+  # --------------------------------------------------------------- servicios ---
+  academic:
+    build: ./services/academic
+    container_name: cc-academic
+    environment:
+      SERVICE_NAME: academic
+      PORT: 3001
+      DATABASE_URL: postgres://campus:campus@postgres:5432/academicdb
+      AMQP_URL: amqp://guest:guest@rabbitmq:5672
+    ports: ["3001:3001"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+    networks: [campusnet]
+    restart: on-failure
+
+  payments:
+    build: ./services/payments
+    container_name: cc-payments
+    environment:
+      SERVICE_NAME: payments
+      PORT: 3002
+      DATABASE_URL: postgres://campus:campus@postgres:5432/paymentsdb
+      AMQP_URL: amqp://guest:guest@rabbitmq:5672
+    ports: ["3002:3002"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+    networks: [campusnet]
+    restart: on-failure
+
+  attendance:
+    build: ./services/attendance
+    container_name: cc-attendance
+    environment:
+      SERVICE_NAME: attendance
+      PORT: 3003
+      DATABASE_URL: postgres://campus:campus@postgres:5432/attendancedb
+      AMQP_URL: amqp://guest:guest@rabbitmq:5672
+    ports: ["3003:3003"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+    networks: [campusnet]
+    restart: on-failure
+
+  notifications:
+    build: ./services/notifications
+    container_name: cc-notifications
+    environment:
+      SERVICE_NAME: notifications
+      PORT: 3004
+      DATABASE_URL: postgres://campus:campus@postgres:5432/notificationsdb
+      AMQP_URL: amqp://guest:guest@rabbitmq:5672
+    ports: ["3004:3004"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+    networks: [campusnet]
+    restart: on-failure
+
+  analytics:
+    build: ./services/analytics
+    container_name: cc-analytics
+    environment:
+      SERVICE_NAME: analytics
+      PORT: 3005
+      DATABASE_URL: postgres://campus:campus@postgres:5432/analyticsdb
+      AMQP_URL: amqp://guest:guest@rabbitmq:5672
+    ports: ["3005:3005"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+    networks: [campusnet]
+    restart: on-failure
+
+  # ----------------------------------------------------------------- gateway ---
+  gateway:
+    build: ./gateway
+    container_name: cc-gateway
+    environment:
+      SERVICE_NAME: gateway
+      PORT: 8080
+      JWT_SECRET: campusconnect-dev-secret
+      ACADEMIC_URL: http://academic:3001
+      PAYMENTS_URL: http://payments:3002
+      ATTENDANCE_URL: http://attendance:3003
+      NOTIFICATIONS_URL: http://notifications:3004
+      ANALYTICS_URL: http://analytics:3005
+    ports: ["8080:8080"]
+    depends_on:
+      - academic
+      - payments
+      - attendance
+      - notifications
+      - analytics
+    networks: [campusnet]
+    restart: on-failure
+
+  # ---------------------------------------------------------------- frontend ---
+  frontend:
+    build: ./frontends
+    container_name: cc-frontend
+    ports: ["8090:80"]
+    depends_on:
+      - gateway
+    networks: [campusnet]
+
+networks:
+  campusnet:
+    driver: bridge
+
+volumes:
+  pgdata:

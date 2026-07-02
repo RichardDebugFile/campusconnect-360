@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard Directivo · CampusConnect 360</title>
+  <link rel="stylesheet" href="/common/styles.css" />
+</head>
+<body>
+  <header>
+    <h1>📊 Dashboard Directivo</h1>
+    <div><span class="role" id="who"></span> <button class="secondary" onclick="Auth.clear();location.reload()">Salir</button></div>
+  </header>
+  <div class="container" id="app"></div>
+  <div id="gate"></div>
+
+  <script src="/common/api.js"></script>
+  <script>
+    let timer;
+    function init() {
+      document.getElementById('who').textContent = Auth.name + ' (' + Auth.role + ')';
+      document.getElementById('app').innerHTML = `
+        <div class="card"><h2>Indicadores del ecosistema</h2><div class="grid" id="metrics"
+          style="grid-template-columns:repeat(4,1fr)"></div></div>
+        <div class="grid" style="margin-top:16px">
+          <div class="card"><h2>Estado de servicios (health)</h2><div id="health"></div></div>
+          <div class="card"><h2>Panel de resiliencia (demo de falla)</h2>
+            <p class="muted">Simula la caída del proveedor de notificaciones para evidenciar reintentos y DLQ.</p>
+            <div class="row">
+              <button class="danger" onclick="failMode(true)">Activar caída</button>
+              <button class="ok" onclick="failMode(false)">Restaurar servicio</button>
+              <button class="secondary" onclick="reprocesar()">Reprocesar DLQ</button>
+            </div>
+            <div id="failState" class="muted" style="margin-top:8px"></div>
+          </div>
+        </div>
+        <div class="card" style="margin-top:16px"><h2>Trazabilidad: flujo reciente de eventos</h2>
+          <div id="events"></div></div>`;
+      refresh();
+      timer = setInterval(refresh, 3000);
+    }
+
+    async function refresh() {
+      try {
+        const m = await api('GET', '/analytics/metrics');
+        let pending = 0;
+        try { pending = (await api('GET', '/payments/payments?status=pending')).length; } catch (_) {}
+        const cells = [
+          ['Estudiantes', m.totalStudents], ['Pagos confirmados', m.paymentsConfirmed],
+          ['Pagos pendientes', pending], ['Asistencias', m.attendanceRecorded],
+          ['Incidentes', m.incidentsReported], ['Eventos procesados', m.eventsProcessed],
+          ['Notificaciones', m.notificationsSent], ['Errores/fallidos', m.notificationsFailed],
+        ];
+        document.getElementById('metrics').innerHTML = cells.map(([l, n]) =>
+          `<div class="metric"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
+
+        const ev = await api('GET', '/analytics/events?limit=15');
+        document.getElementById('events').innerHTML = ev.length ? `
+          <table><thead><tr><th>Evento</th><th>Entidad</th><th>Correlación</th><th>Hora</th></tr></thead>
+          <tbody>${ev.map(e => `<tr><td>${e.event_type}</td><td>${e.entity_id||''}</td>
+          <td class="muted">${(e.correlation_id||'').slice(0,18)}…</td>
+          <td class="muted">${new Date(e.occurred_at).toLocaleTimeString()}</td></tr>`).join('')}</tbody></table>`
+          : '<p class="muted">Aún no hay eventos.</p>';
+      } catch (e) { /* silencioso en polling */ }
+      health();
+    }
+
+    async function health() {
+      try {
+        const r = await fetch((window.GATEWAY_URL||'http://localhost:8080') + '/health');
+        const h = await r.json();
+        document.getElementById('health').innerHTML = `<table><tbody>${
+          Object.entries(h.services).map(([n, s]) => {
+            const up = s && (s.db !== undefined ? (s.db && s.broker) : s.status !== 'down');
+            return `<tr><td>${n}</td><td>${up ? badge('confirmed') : badge('failed')}</td></tr>`;
+          }).join('')}</tbody></table>`;
+      } catch (_) {}
+    }
+
+    async function failMode(on) {
+      try {
+        const r = await api('POST', '/notifications/admin/fail-mode', { enabled: on });
+        document.getElementById('failState').textContent = 'Modo de fallo: ' + (r.failMode ? 'ACTIVO ⚠️' : 'inactivo ✅');
+        toast(on ? 'Notificaciones en falla: los mensajes irán a reintento/DLQ' : 'Servicio de notificaciones restaurado');
+      } catch (e) { toast(e.message, 'err'); }
+    }
+
+    async function reprocesar() {
+      try {
+        const r = await api('POST', '/notifications/admin/reprocess-dlq');
+        toast('Reprocesados desde DLQ: ' + r.reprocessed);
+      } catch (e) { toast(e.message, 'err'); }
+    }
+
+    renderLogin('gate', 'Dashboard Directivo', 'admin', init);
+  </script>
+</body>
+</html>

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Portal Académico · CampusConnect 360</title>
+  <link rel="stylesheet" href="/common/styles.css" />
+</head>
+<body>
+  <header>
+    <h1>🎓 Portal Académico / Secretaría</h1>
+    <div><span class="role" id="who"></span> <button class="secondary" onclick="Auth.clear();location.reload()">Salir</button></div>
+  </header>
+  <div class="container" id="app"></div>
+  <div id="gate"></div>
+
+  <script src="/common/api.js"></script>
+  <script>
+    function init() {
+      document.getElementById('who').textContent = Auth.name + ' (' + Auth.role + ')';
+      document.getElementById('app').innerHTML = `
+        <div class="grid">
+          <div class="card">
+            <h2>Registrar estudiante y matrícula</h2>
+            <label>Nombre</label><input id="fn" placeholder="María" />
+            <label>Apellido</label><input id="ln" placeholder="Pérez" />
+            <label>Curso/Grado</label><input id="gr" value="8vo EGB" />
+            <label>Colegio (schoolId)</label><input id="sc" value="SCH-001" />
+            <button id="reg">Registrar + Matricular</button>
+          </div>
+          <div class="card">
+            <h2>Ficha del estudiante</h2>
+            <div id="ficha"><p class="muted">Selecciona un estudiante de la lista.</p></div>
+          </div>
+        </div>
+        <div class="card" style="margin-top:16px">
+          <h2>Estudiantes</h2>
+          <div id="list"><p class="muted">Cargando...</p></div>
+        </div>`;
+      document.getElementById('reg').onclick = registrar;
+      cargar();
+    }
+
+    async function registrar() {
+      try {
+        const body = {
+          firstName: fn.value.trim(), lastName: ln.value.trim(),
+          grade: gr.value.trim(), schoolId: sc.value.trim(),
+        };
+        const r = await api('POST', '/academic/students', body);
+        toast('Estudiante ' + r.student.id + ' matriculado · evento StudentEnrolled publicado');
+        fn.value = ln.value = '';
+        cargar();
+      } catch (e) { toast(e.message, 'err'); }
+    }
+
+    async function cargar() {
+      try {
+        const rows = await api('GET', '/academic/students');
+        document.getElementById('list').innerHTML = rows.length ? `
+          <table><thead><tr><th>ID</th><th>Nombre</th><th>Grado</th><th>Académico</th><th>Financiero</th><th></th></tr></thead>
+          <tbody>${rows.map(s => `
+            <tr><td>${s.id}</td><td>${s.first_name} ${s.last_name}</td><td>${s.grade}</td>
+            <td>${badge(s.academic_status)}</td><td>${badge(s.financial_status)}</td>
+            <td><button class="secondary" onclick="ficha('${s.id}')">Ver ficha</button></td></tr>`).join('')}
+          </tbody></table>` : '<p class="muted">Sin estudiantes aún.</p>';
+      } catch (e) { toast(e.message, 'err'); }
+    }
+
+    async function ficha(id) {
+      try {
+        const s = await api('GET', '/academic/students/' + id);
+        let events = [];
+        try { events = await api('GET', '/analytics/students/' + id + '/events'); } catch (_) {}
+        document.getElementById('ficha').innerHTML = `
+          <p><b>${s.first_name} ${s.last_name}</b> · ${s.id}</p>
+          <p class="muted">Grado: ${s.grade} · Colegio: ${s.school_id}</p>
+          <p>Estado académico: ${badge(s.academic_status)} · Financiero: ${badge(s.financial_status)}</p>
+          <h2 style="margin-top:12px">Historial de eventos</h2>
+          ${events.length ? `<table><thead><tr><th>Evento</th><th>Fecha</th><th>Correlación</th></tr></thead>
+          <tbody>${events.map(e => `<tr><td>${e.event_type}</td>
+          <td>${new Date(e.occurred_at).toLocaleString()}</td>
+          <td class="muted">${(e.correlation_id||'').slice(0,16)}…</td></tr>`).join('')}</tbody></table>`
+          : '<p class="muted">Sin eventos registrados.</p>'}`;
+      } catch (e) { toast(e.message, 'err'); }
+    }
+
+    renderLogin('gate', 'Portal Académico', 'secretaria', init);
+  </script>
+</body>
+</html>
