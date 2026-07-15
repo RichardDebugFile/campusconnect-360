@@ -155,13 +155,65 @@ app.get('/students/:id', async (req, res) => {
 });
 
 // ---------- Consumidor: PaymentConfirmed (Idempotent Receiver) ----------
-// TODO(academic): Procesar PaymentConfirmed de forma idempotente.
-//   1. validateEvent(event); si no es válido, lanza (=> reintento/DLQ).
-//   2. db.markProcessed(eventId, eventType); si ya procesado, return (idempotencia).
-//   3. UPDATE students SET financial_status='solvent' WHERE id = event.entityId.
-//   4. Publicar StudentStatusUpdated (buildEvent + mq.publish).
+// HU-A2: marca al estudiante como solvente y propaga el mismo correlationId.
 async function onPaymentConfirmed(event) {
-  log.warn('TODO: implementar onPaymentConfirmed', { eventId: event.eventId });
+  const check = validateEvent(event);
+  if (!check.valid) {
+    throw new Error(`Evento con formato inválido: ${check.reason}`);
+  }
+  if (event.eventType !== EVENT_TYPES.PaymentConfirmed) {
+    throw new Error(`Tipo de evento no soportado: ${event.eventType}`);
+  }
+
+  const firstProcessing = await db.markProcessed(event.eventId, event.eventType);
+  if (!firstProcessing) {
+    log.info('PaymentConfirmed duplicado ignorado', { eventId: event.eventId });
+    return;
+  }
+
+  try {
+    const result = await db.query(
+      `UPDATE students
+       SET financial_status = 'solvent'
+       WHERE id = $1
+       RETURNING id, financial_status`,
+      [event.entityId]
+    );
+
+    if (!result.rowCount) {
+      log.warn('PaymentConfirmed referencia un estudiante inexistente', {
+        eventId: event.eventId,
+        studentId: event.entityId,
+      });
+      return;
+    }
+
+    const statusEvent = buildEvent(EVENT_TYPES.StudentStatusUpdated, {
+      entityId: event.entityId,
+      correlationId: event.correlationId,
+      data: {
+        academicStatus: 'active',
+        financialStatus: result.rows[0].financial_status,
+        sourceEventId: event.eventId,
+        paymentId: event.data && event.data.paymentId,
+      },
+    });
+    await mq.publish(statusEvent);
+    log.info('Estado financiero del estudiante actualizado', {
+      studentId: event.entityId,
+      eventId: event.eventId,
+      statusEventId: statusEvent.eventId,
+      correlationId: event.correlationId,
+    });
+  } catch (err) {
+    // Permite que un fallo transitorio vuelva a procesarse mediante el retry/DLQ.
+    await db.query('DELETE FROM processed_events WHERE event_id = $1', [event.eventId])
+      .catch((cleanupErr) => log.error('No se pudo liberar la marca idempotente', {
+        eventId: event.eventId,
+        err: cleanupErr.message,
+      }));
+    throw err;
+  }
 }
 
 // ---------- Arranque y wiring de mensajería (ANDAMIAJE — no tocar) ----------
