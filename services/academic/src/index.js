@@ -26,23 +26,28 @@ app.use(express.json());
 app.use(correlation);
 app.use(identity);
 
-// --- TODO(academic): define el esquema de tu servicio --------------------------
-// Descomenta y adapta el modelo de datos de tu dominio. Mientras no definas
-// tablas, el SELECT 1 evita que db.init falle al arrancar.
+// --- HU-A1: modelo de estudiantes y matrículas --------------------------------
 const DDL = `
-  -- CREATE SEQUENCE IF NOT EXISTS student_seq START 1;
-  -- CREATE TABLE IF NOT EXISTS students (
-  --   id               TEXT PRIMARY KEY DEFAULT ('STU-' || lpad(nextval('student_seq')::text, 4, '0')),
-  --   first_name       TEXT NOT NULL,
-  --   last_name        TEXT NOT NULL,
-  --   grade            TEXT NOT NULL,
-  --   school_id        TEXT NOT NULL,
-  --   academic_status  TEXT NOT NULL DEFAULT 'active',
-  --   financial_status TEXT NOT NULL DEFAULT 'pending',
-  --   created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
-  -- );
-  -- CREATE TABLE IF NOT EXISTS enrollments ( ... );
-  SELECT 1;
+  CREATE SEQUENCE IF NOT EXISTS student_seq START 1;
+  CREATE TABLE IF NOT EXISTS students (
+    id               TEXT PRIMARY KEY DEFAULT ('STU-' || lpad(nextval('student_seq')::text, 4, '0')),
+    first_name       TEXT NOT NULL,
+    last_name        TEXT NOT NULL,
+    grade            TEXT NOT NULL,
+    school_id        TEXT NOT NULL,
+    academic_status  TEXT NOT NULL DEFAULT 'active',
+    financial_status TEXT NOT NULL DEFAULT 'pending',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  CREATE TABLE IF NOT EXISTS enrollments (
+    id          BIGSERIAL PRIMARY KEY,
+    student_id  TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    grade       TEXT NOT NULL,
+    school_id   TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'active',
+    enrolled_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  CREATE INDEX IF NOT EXISTS idx_enrollments_student_id ON enrollments(student_id);
 `;
 
 // ---------- API REST ----------
@@ -52,24 +57,101 @@ app.get('/health', async (req, res) => {
   res.json({ service: 'academic', db: await db.isHealthy(), broker: mq.isConnected(), ts: new Date().toISOString() });
 });
 
-// TODO(academic): Registrar estudiante + matrícula y publicar StudentEnrolled.
-//   1. Validar body (firstName, lastName, grade, schoolId) -> 400 si falta.
-//   2. INSERT en students (+ enrollments).
-//   3. buildEvent(EVENT_TYPES.StudentEnrolled, { entityId, correlationId: req.correlationId, data }).
-//   4. await mq.publish(event).
-//   5. Responder 201 con el estudiante y { eventId }.
+// HU-A1: registra estudiante + matrícula y publica StudentEnrolled.
 app.post('/students', requireRole('secretaria', 'admin'), async (req, res) => {
-  res.status(501).json({ error: 'TODO: implementar POST /students' });
+  const fields = ['firstName', 'lastName', 'grade', 'schoolId'];
+  const values = Object.fromEntries(fields.map((field) => [
+    field,
+    typeof req.body[field] === 'string' ? req.body[field].trim() : '',
+  ]));
+  const missing = fields.filter((field) => !values[field]);
+
+  if (missing.length) {
+    return res.status(400).json({
+      error: 'Faltan campos obligatorios',
+      fields: missing,
+    });
+  }
+
+  let client;
+  try {
+    client = await db.pool.connect();
+    await client.query('BEGIN');
+    const studentResult = await client.query(
+      `INSERT INTO students (first_name, last_name, grade, school_id)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [values.firstName, values.lastName, values.grade, values.schoolId]
+    );
+    const student = studentResult.rows[0];
+    const enrollmentResult = await client.query(
+      `INSERT INTO enrollments (student_id, grade, school_id)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
+      [student.id, student.grade, student.school_id]
+    );
+    const enrollment = enrollmentResult.rows[0];
+    const event = buildEvent(EVENT_TYPES.StudentEnrolled, {
+      entityId: student.id,
+      correlationId: req.correlationId,
+      data: {
+        firstName: student.first_name,
+        lastName: student.last_name,
+        grade: student.grade,
+        schoolId: student.school_id,
+        enrollmentId: enrollment.id,
+      },
+    });
+
+    await mq.publish(event);
+    await client.query('COMMIT');
+    return res.status(201).json({
+      student: { ...student, enrollments: [enrollment] },
+      eventId: event.eventId,
+    });
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    log.error('Error al registrar estudiante', {
+      correlationId: req.correlationId,
+      err: err.message,
+    });
+    return res.status(500).json({ error: 'No se pudo registrar el estudiante' });
+  } finally {
+    if (client) client.release();
+  }
 });
 
-// TODO(academic): Listar estudiantes (SELECT * FROM students).
+// HU-A1: lista estudiantes para los portales autorizados.
 app.get('/students', requireRole('secretaria', 'admin', 'finanzas', 'docente', 'director'), async (req, res) => {
-  res.status(501).json({ error: 'TODO: implementar GET /students' });
+  try {
+    const { rows } = await db.query('SELECT * FROM students ORDER BY created_at ASC, id ASC');
+    return res.json(rows);
+  } catch (err) {
+    log.error('Error al listar estudiantes', { correlationId: req.correlationId, err: err.message });
+    return res.status(500).json({ error: 'No se pudieron consultar los estudiantes' });
+  }
 });
 
-// TODO(academic): Ficha del estudiante por id (404 si no existe) + sus matrículas.
+// HU-A1: devuelve la ficha del estudiante y todas sus matrículas.
 app.get('/students/:id', async (req, res) => {
-  res.status(501).json({ error: 'TODO: implementar GET /students/:id' });
+  try {
+    const studentResult = await db.query('SELECT * FROM students WHERE id = $1', [req.params.id]);
+    if (!studentResult.rowCount) {
+      return res.status(404).json({ error: 'Estudiante no encontrado' });
+    }
+    const enrollmentResult = await db.query(
+      'SELECT * FROM enrollments WHERE student_id = $1 ORDER BY enrolled_at ASC, id ASC',
+      [req.params.id]
+    );
+    return res.json({ ...studentResult.rows[0], enrollments: enrollmentResult.rows });
+  } catch (err) {
+    log.error('Error al consultar estudiante', {
+      studentId: req.params.id,
+      correlationId: req.correlationId,
+      err: err.message,
+    });
+    return res.status(500).json({ error: 'No se pudo consultar el estudiante' });
+  }
 });
 
 // ---------- Consumidor: PaymentConfirmed (Idempotent Receiver) ----------
