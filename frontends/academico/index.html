@@ -16,7 +16,16 @@
 
   <script src="/common/api.js"></script>
   <script>
+    const canRegister = () => ['secretaria', 'admin'].includes(Auth.role);
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, char => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;',
+      })[char]);
+    }
+
     function init() {
+      document.getElementById('gate').innerHTML = '';
       document.getElementById('who').textContent = Auth.name + ' (' + Auth.role + ')';
       document.getElementById('app').innerHTML = `
         <div class="grid">
@@ -26,7 +35,8 @@
             <label>Apellido</label><input id="ln" placeholder="Pérez" />
             <label>Curso/Grado</label><input id="gr" value="8vo EGB" />
             <label>Colegio (schoolId)</label><input id="sc" value="SCH-001" />
-            <button id="reg">Registrar + Matricular</button>
+            <button id="reg" ${canRegister() ? '' : 'disabled'}>Registrar + Matricular</button>
+            ${canRegister() ? '' : '<p class="muted">Solo Secretaría o Administración pueden registrar estudiantes.</p>'}
           </div>
           <div class="card">
             <h2>Ficha del estudiante</h2>
@@ -42,47 +52,83 @@
     }
 
     async function registrar() {
+      const button = document.getElementById('reg');
       try {
         const body = {
-          firstName: fn.value.trim(), lastName: ln.value.trim(),
-          grade: gr.value.trim(), schoolId: sc.value.trim(),
+          firstName: document.getElementById('fn').value.trim(),
+          lastName: document.getElementById('ln').value.trim(),
+          grade: document.getElementById('gr').value.trim(),
+          schoolId: document.getElementById('sc').value.trim(),
         };
+        if (Object.values(body).some(value => !value)) {
+          throw new Error('Completa todos los campos obligatorios');
+        }
+        button.disabled = true;
+        button.textContent = 'Registrando...';
         const r = await api('POST', '/academic/students', body);
         toast('Estudiante ' + r.student.id + ' matriculado · evento StudentEnrolled publicado');
-        fn.value = ln.value = '';
-        cargar();
-      } catch (e) { toast(e.message, 'err'); }
+        document.getElementById('fn').value = '';
+        document.getElementById('ln').value = '';
+        await cargar();
+        await ficha(r.student.id);
+      } catch (e) {
+        toast(e.message, 'err');
+      } finally {
+        button.disabled = !canRegister();
+        button.textContent = 'Registrar + Matricular';
+      }
     }
 
     async function cargar() {
+      const list = document.getElementById('list');
+      list.innerHTML = '<p class="muted">Cargando estudiantes...</p>';
       try {
         const rows = await api('GET', '/academic/students');
-        document.getElementById('list').innerHTML = rows.length ? `
+        list.innerHTML = rows.length ? `
           <table><thead><tr><th>ID</th><th>Nombre</th><th>Grado</th><th>Académico</th><th>Financiero</th><th></th></tr></thead>
           <tbody>${rows.map(s => `
-            <tr><td>${s.id}</td><td>${s.first_name} ${s.last_name}</td><td>${s.grade}</td>
-            <td>${badge(s.academic_status)}</td><td>${badge(s.financial_status)}</td>
-            <td><button class="secondary" onclick="ficha('${s.id}')">Ver ficha</button></td></tr>`).join('')}
+            <tr><td>${escapeHtml(s.id)}</td><td>${escapeHtml(s.first_name)} ${escapeHtml(s.last_name)}</td><td>${escapeHtml(s.grade)}</td>
+            <td>${badge(escapeHtml(s.academic_status))}</td><td>${badge(escapeHtml(s.financial_status))}</td>
+            <td><button class="secondary" data-student-id="${escapeHtml(s.id)}">Ver ficha</button></td></tr>`).join('')}
           </tbody></table>` : '<p class="muted">Sin estudiantes aún.</p>';
-      } catch (e) { toast(e.message, 'err'); }
+        list.querySelectorAll('[data-student-id]').forEach(button => {
+          button.onclick = () => ficha(button.dataset.studentId);
+        });
+      } catch (e) {
+        list.innerHTML = `<p class="muted">No se pudo cargar el listado: ${escapeHtml(e.message)}</p>`;
+        toast(e.message, 'err');
+      }
     }
 
     async function ficha(id) {
+      const detail = document.getElementById('ficha');
+      detail.innerHTML = '<p class="muted">Cargando ficha e historial...</p>';
       try {
-        const s = await api('GET', '/academic/students/' + id);
+        const safeId = encodeURIComponent(id);
+        const s = await api('GET', '/academic/students/' + safeId);
         let events = [];
-        try { events = await api('GET', '/analytics/students/' + id + '/events'); } catch (_) {}
-        document.getElementById('ficha').innerHTML = `
-          <p><b>${s.first_name} ${s.last_name}</b> · ${s.id}</p>
-          <p class="muted">Grado: ${s.grade} · Colegio: ${s.school_id}</p>
-          <p>Estado académico: ${badge(s.academic_status)} · Financiero: ${badge(s.financial_status)}</p>
+        let eventsError = '';
+        try {
+          events = await api('GET', '/analytics/students/' + safeId + '/events');
+        } catch (e) {
+          eventsError = e.message;
+        }
+        detail.innerHTML = `
+          <p><b>${escapeHtml(s.first_name)} ${escapeHtml(s.last_name)}</b> · ${escapeHtml(s.id)}</p>
+          <p class="muted">Grado: ${escapeHtml(s.grade)} · Colegio: ${escapeHtml(s.school_id)}</p>
+          <p>Estado académico: ${badge(escapeHtml(s.academic_status))} · Financiero: ${badge(escapeHtml(s.financial_status))}</p>
           <h2 style="margin-top:12px">Historial de eventos</h2>
-          ${events.length ? `<table><thead><tr><th>Evento</th><th>Fecha</th><th>Correlación</th></tr></thead>
-          <tbody>${events.map(e => `<tr><td>${e.event_type}</td>
-          <td>${new Date(e.occurred_at).toLocaleString()}</td>
-          <td class="muted">${(e.correlation_id||'').slice(0,16)}…</td></tr>`).join('')}</tbody></table>`
+          ${eventsError
+            ? `<p class="muted">No se pudo consultar el historial: ${escapeHtml(eventsError)}</p>`
+            : events.length ? `<table><thead><tr><th>Evento</th><th>Fecha</th><th>Correlación</th></tr></thead>
+          <tbody>${events.map(e => `<tr><td>${escapeHtml(e.event_type)}</td>
+          <td>${escapeHtml(new Date(e.occurred_at).toLocaleString())}</td>
+          <td class="muted">${escapeHtml((e.correlation_id || '').slice(0, 16))}…</td></tr>`).join('')}</tbody></table>`
           : '<p class="muted">Sin eventos registrados.</p>'}`;
-      } catch (e) { toast(e.message, 'err'); }
+      } catch (e) {
+        detail.innerHTML = `<p class="muted">No se pudo cargar la ficha: ${escapeHtml(e.message)}</p>`;
+        toast(e.message, 'err');
+      }
     }
 
     renderLogin('gate', 'Portal Académico', 'secretaria', init);
