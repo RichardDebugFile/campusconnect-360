@@ -1,75 +1,168 @@
-# CampusConnect 360 — Plantilla (esqueleto del proyecto)
+# CampusConnect 360
 
-Punto de partida del Proyecto Integrador (Integración de Sistemas, Progreso 3).
-**El andamiaje está completo y verificado; tú implementas la lógica de negocio.**
+**Ecosistema funcional de integración para una red de colegios.**
+Proyecto Integrador — Integración de Sistemas (Progreso 3).
 
-Esta plantilla NO es el proyecto terminado: cada servicio tiene sus endpoints y
-sus handlers de eventos marcados con `TODO`. La idea es repartir esos TODO entre
-el equipo (ver `IMPLEMENTAR.md`) para que cada integrante tenga autoría y commits
-propios.
-
----
-
-## ✅ Qué YA está hecho (andamiaje — normalmente no se toca)
-
-- **`shared/`** — núcleo común reutilizable (copiado a cada servicio):
-  `logger` (logs JSON), `events` (estructura y validación de eventos),
-  `amqp` (RabbitMQ: topic exchange, Pub/Sub, reintentos y **Dead Letter Queue**),
-  `db` (PostgreSQL + tabla de idempotencia `processed_events`),
-  `http` (correlationId, identidad por headers, `requireRole`, Swagger).
-- **`gateway/`** — API Gateway con login JWT, autorización por rol, enrutado
-  `/api/<servicio>/*`, inyección de identidad y health agregado. **Funciona tal cual.**
-- **`infra/`, `docker-compose.yml`** — RabbitMQ, PostgreSQL (5 bases separadas),
-  los 5 servicios, el gateway y el frontend. Un comando levanta todo.
-- **`frontends/`** — 4 portales (Académico, Financiero, Docente, Dashboard) ya
-  construidos; consumen el gateway. Quedan operativos cuando implementes el backend.
-- En cada servicio: imports, middlewares, `/health`, el **wiring de mensajería**
-  en `start()` (qué cola consume y a qué eventos se enlaza) y el arranque.
-
-## 🛠️ Qué te toca implementar (busca los `TODO`)
-
-En `services/<servicio>/src/index.js`:
-1. **`DDL`** — descomenta/adapta el esquema de la base de tu servicio.
-2. **Endpoints REST** — hoy responden `501 Not Implemented`; implementa la lógica.
-3. **Handlers de eventos** (`onEvent` / `onPaymentConfirmed`) — consumir, ser
-   **idempotente** (`db.markProcessed`) y publicar los eventos que correspondan.
-4. **Message Translator** (solo Notificaciones): `eventToNotification`.
-
-Lista completa y repartible en **`IMPLEMENTAR.md`**.
+Sistema **event-driven** de microservicios que simula un día de operación de una
+red educativa: registro de estudiantes, pagos, asistencia/incidentes,
+notificaciones automáticas, dashboard directivo y un escenario de falla
+controlada. Todos los flujos son **operables desde interfaces web**; el gateway,
+la mensajería y las bases están completamente implementados.
 
 ---
 
-## ▶️ Cómo levantar el entorno
+## Arranque
 
+### Un clic (Windows)
+```bat
+start.bat
+```
+Verifica Docker, construye y levanta todo, espera al gateway, ofrece cargar
+datos semilla y abre los portales en el navegador.
+
+### Manual (cualquier SO)
 ```bash
-docker compose up --build
+docker compose up --build -d      # levanta el ecosistema completo
+bash scripts/seed.sh              # (opcional) datos semilla de demostración
+docker compose down               # detener todo
 ```
 
 | Qué | URL |
 |-----|-----|
 | Portales | http://localhost:8090 |
 | API Gateway | http://localhost:8080 |
-| Swagger por servicio | http://localhost:8080/api/<servicio>/docs |
-| RabbitMQ | http://localhost:15672 (guest/guest) |
+| Swagger por servicio | http://localhost:8080/api/&lt;servicio&gt;/docs |
+| RabbitMQ (consola) | http://localhost:15672 · guest/guest |
 
-> La plantilla **arranca** aunque no hayas implementado nada (los endpoints
-> responden `501`). Vas viendo el sistema cobrar vida a medida que completas TODOs.
+### Usuarios de prueba (clave `campus123`)
+`secretaria`, `finanzas`, `docente`, `bienestar`, `director`, `admin`.
+Cada portal pide el actor que le corresponde.
 
-## 👤 Usuarios de prueba
-Todos con clave `campus123`: `secretaria`, `finanzas`, `docente`, `bienestar`,
-`director`, `admin`.
+---
 
-## 🔌 Eventos del ecosistema
+## Arquitectura
+
+Nadie llama directo a otro servicio: **la única integración es por eventos**
+(RabbitMQ). Cada servicio es dueño de **su propia base** (Database per Service).
+
+```
+  ACTORES              PORTALES (:8090)        GATEWAY (:8080)         SERVICIOS + BD
+  --------             ----------------        ---------------         --------------
+  Secretaria      ->  Portal Academico    -,                      ,-> academic      + academicdb
+  Finanzas        ->  Portal Financiero    +-> JWT + enrutado  ---+-> payments      + paymentsdb
+  Docente/Bienest ->  Portal Docente       |   /api/<svc>/*       +-> attendance    + attendancedb
+  Direccion/Admin ->  Dashboard           -'   inyecta identidad  +-> notifications + notificationsdb
+                                                                  '-> analytics     + analyticsdb
+                                RabbitMQ  -- topic exchange `campus.events` + DLX -- conecta todo
+```
+
+### Flujo "un día de operación"
+| Acción (portal) | Servicio | Evento publicado | Reaccionan |
+|---|---|---|---|
+| Registrar estudiante + matrícula | academic | `StudentEnrolled` | notifications, analytics |
+| Confirmar pago | payments | `PaymentConfirmed` | academic (a *solvent*), notifications, analytics |
+| academic marca solvente | academic | `StudentStatusUpdated` | analytics |
+| Registrar asistencia / incidente | attendance | `AttendanceRecorded` / `IncidentReported` | notifications, analytics |
+| Entrega de notificación (simulada) | notifications | `NotificationSent` / `NotificationFailed` | analytics |
+| Ver indicadores | analytics (CQRS) | — | Dashboard en vivo |
+
+---
+
+## Servicios
+
+| Servicio | Puerto | Responsabilidad | Publica | Consume |
+|---|---|---|---|---|
+| **academic** | 3001 | Estudiantes y matrículas | StudentEnrolled, StudentStatusUpdated | PaymentConfirmed (Point-to-Point) |
+| **payments** | 3002 | Obligaciones y pagos | PaymentConfirmed | — |
+| **attendance** | 3003 | Asistencia e incidentes/bienestar | AttendanceRecorded, IncidentReported | — |
+| **notifications** | 3004 | Notificaciones (Message Translator) | NotificationSent, NotificationFailed | los 4 eventos de negocio (Pub/Sub) |
+| **analytics** | 3005 | Modelo de lectura CQRS (`event_store`) | — | los 7 eventos (Pub/Sub, fan-out) |
+| **gateway** | 8080 | Entrada única, login JWT, autorización por rol | — | — |
+
+---
+
+## Eventos (7)
 `StudentEnrolled`, `PaymentConfirmed`, `AttendanceRecorded`, `IncidentReported`,
 `StudentStatusUpdated`, `NotificationSent`, `NotificationFailed`.
-Estructura: `eventId`, `eventType`, `occurredAt`, `correlationId`, `entityId`, `data`.
 
-## 📁 Estructura
-Igual que el proyecto de referencia, con los `index.js` de cada servicio en
-modo esqueleto. Ver `docs/ARQUITECTURA.md` para el diseño completo y
-`postman/` para el contrato de la API (sirve de guía de implementación).
+Estructura mínima (`shared/events.js`):
+`eventId`, `eventType`, `occurredAt`, `correlationId`, `entityId`, `data`.
 
-## 🤖 Uso de IA
-La plantilla y el andamiaje se apoyaron en IA generativa (permitido por la
-consigna). La **implementación de la lógica de negocio la realiza el equipo**,
-lo que garantiza autoría real y commits por integrante (ver `IMPLEMENTAR.md`).
+---
+
+## Patrones de integración aplicados
+
+| Patrón | Evidencia en el código |
+|---|---|
+| API Gateway | `gateway/` — entrada única, JWT, proxy `/api/<svc>/*` |
+| Publish/Subscribe | notifications **y** analytics consumen el mismo evento (fan-out) |
+| Point-to-Point | cola `academic.payment-confirmed` (un único consumidor) |
+| Message Channel | topic exchange `campus.events` + colas por servicio |
+| Event Message | `buildEvent()` — eventos con estructura mínima común |
+| Message Translator | `eventToNotification()` en notifications |
+| Idempotent Receiver | tabla `processed_events` / `ON CONFLICT (event_id)` |
+| Dead Letter Channel | `campus.dlx` a `<cola>.dlq` al agotar reintentos |
+| CQRS / vista analítica | `event_store` alimenta el dashboard |
+| Health Check | `/health` por servicio + agregado en el gateway |
+| Logs / Trazabilidad | logs JSON con `correlationId` de extremo a extremo |
+
+---
+
+## Resiliencia (escenario de falla controlada)
+Desde el **Dashboard, Panel de resiliencia**:
+1. **Activar caída**: notifications simula proveedor caído.
+2. Genera un evento (ej. registra asistencia): falla, **reintentos**, **DLQ**.
+3. **Restaurar servicio** y **Reprocesar DLQ**: los mensajes se reinyectan.
+
+Mecanismos: reintentos con cabecera `x-retry`, Dead Letter Queue, idempotencia,
+reprocesamiento manual, health checks y reconexión automática a RabbitMQ.
+
+---
+
+## Seguridad
+JWT emitido por el gateway (`/auth/login`, TTL 8h). El gateway valida el token e
+inyecta `x-user-id` / `x-user-role`; los servicios autorizan por rol
+(`requireRole`). En producción solo el gateway sería la entrada pública.
+
+## Observabilidad
+Logs JSON estructurados con `correlationId`, health checks por servicio y
+agregado, y trazabilidad global de eventos en analytics (`GET /events`).
+
+---
+
+## Pruebas
+Verificación de la lógica de integración **sin broker ni BD reales** (usa dobles
+de prueba para amqplib):
+```bash
+node tests/verify.js
+```
+Cubre: contrato de eventos, Message Translator y reintentos hacia DLQ.
+
+---
+
+## Estructura
+```
+gateway/            API Gateway (JWT, proxy, health agregado)
+services/           academic · payments · attendance · notifications · analytics
+  <svc>/src/index.js   endpoints REST + handlers de eventos
+  <svc>/src/lib/       copia del núcleo compartido
+  <svc>/src/openapi.js contrato Swagger/OpenAPI del servicio
+shared/             núcleo común (logger, events, amqp+DLQ, db+idempotencia, http)
+frontends/          4 portales (académico, financiero, docente, dashboard) + común
+infra/postgres/     init de las 5 bases
+scripts/seed.sh     datos semilla vía gateway (ejercita APIs y eventos)
+tests/verify.js     verificación de lógica sin dependencias externas
+docs/ARQUITECTURA.md documento de arquitectura
+docker-compose.yml  orquestación completa
+start.bat           arranque en un clic (Windows)
+```
+
+## Documentación
+- **Swagger/OpenAPI** por servicio: `/api/<servicio>/docs` (vía gateway).
+- **Arquitectura**: `docs/ARQUITECTURA.md`.
+- **Postman**: `postman/` (respaldo técnico; la demo principal es por los portales).
+
+## Uso de IA
+Se usó IA generativa como apoyo (código base, frontends, documentación y
+pruebas). El equipo comprende, adapta, ejecuta y defiende toda la solución; la
+distribución por Historias de Usuario garantiza autoría real por integrante.

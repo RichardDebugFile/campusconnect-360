@@ -8,7 +8,7 @@
 </head>
 <body>
   <header>
-    <h1>📊 Dashboard Directivo</h1>
+    <h1>Dashboard Directivo</h1>
     <div><span class="role" id="who"></span> <button class="secondary" onclick="Auth.clear();location.reload()">Salir</button></div>
   </header>
   <div class="container" id="app"></div>
@@ -92,7 +92,7 @@
       } catch (e) { toast(e.message, 'err'); }
     }
 
-    renderLogin('gate', 'Dashboard Directivo', 'admin', init);
+    renderLogin('gate', 'Dashboard Directivo', 'admin', init, ['admin', 'director']);
   </script>
 </body>
 </html>

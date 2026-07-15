@@ -41,8 +41,7 @@ async function api(method, path, body) {
 
 function toast(msg, kind) {
   const t = document.createElement('div');
-  t.className = 'toast';
-  if (kind === 'err') t.style.borderColor = '#ef4444';
+  t.className = 'toast' + (kind === 'err' ? ' err' : '');
   t.textContent = msg;
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 3200);
@@ -52,13 +51,29 @@ function badge(v) {
   return `<span class="badge ${v}">${v}</span>`;
 }
 
-// Pantalla de login reutilizable. defaultUser preselecciona el rol del portal.
-function renderLogin(rootId, title, defaultUser, onReady) {
+// Pantalla de login reutilizable.
+//   defaultUser   preselecciona el usuario esperado por el portal.
+//   allowedRoles  (opcional) roles que pueden operar ESTE portal. Si hay una
+//                 sesión activa con un rol distinto, se pide reingresar con el
+//                 actor correcto (evita el 403 "No autorizado para este rol"
+//                 al reutilizar el token de otro portal en la misma pestaña).
+function renderLogin(rootId, title, defaultUser, onReady, allowedRoles) {
   const root = document.getElementById(rootId);
-  if (Auth.token) { onReady(); return; }
+  const allowed = Array.isArray(allowedRoles) && allowedRoles.length ? allowedRoles : null;
+  const roleOk = !allowed || (Auth.role && allowed.includes(Auth.role));
+
+  if (Auth.token && roleOk) { onReady(); return; }
+
+  // Aviso cuando ya hay sesión pero con un rol que no corresponde a este portal.
+  const mismatch = Auth.token && allowed && !roleOk
+    ? `<p class="muted">Sesión actual: <b>${Auth.role}</b> — este portal requiere
+        ${allowed.map(r => `<b>${r}</b>`).join(' o ')}. Ingresa con el actor correcto.</p>`
+    : '';
+
   root.innerHTML = `
     <div class="login card">
       <h2>${title}</h2>
+      ${mismatch}
       <label>Usuario</label>
       <input id="u" value="${defaultUser}" />
       <label>Contraseña</label>

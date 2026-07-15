@@ -21,44 +21,92 @@ app.use(express.json());
 app.use(correlation);
 app.use(identity);
 
-// --- TODO(payments): define el esquema de tu servicio --------------------------
+// --- P1: modelo de obligaciones de pago ---------------------------------------
 const DDL = `
-  -- CREATE TABLE IF NOT EXISTS payments (
-  --   id           SERIAL PRIMARY KEY,
-  --   student_id   TEXT NOT NULL,
-  --   concept      TEXT NOT NULL,
-  --   amount       NUMERIC(10,2) NOT NULL,
-  --   status       TEXT NOT NULL DEFAULT 'pending',
-  --   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  --   confirmed_at TIMESTAMPTZ
-  -- );
-  SELECT 1;
+  CREATE TABLE IF NOT EXISTS payments (
+    id           SERIAL PRIMARY KEY,
+    student_id   TEXT NOT NULL,
+    concept      TEXT NOT NULL,
+    amount       NUMERIC(10,2) NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'pending',
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    confirmed_at TIMESTAMPTZ
+  );
+  CREATE INDEX IF NOT EXISTS idx_payments_student_id ON payments(student_id);
+  CREATE INDEX IF NOT EXISTS idx_payments_status     ON payments(status);
 `;
 
 app.get('/health', async (req, res) => {
   res.json({ service: 'payments', db: await db.isHealthy(), broker: mq.isConnected(), ts: new Date().toISOString() });
 });
 
-// TODO(payments): Crear obligación/deuda.
-//   1. Validar body (studentId, concept, amount) -> 400 si falta.
-//   2. INSERT en payments (status='pending') RETURNING *.
-//   3. Responder 201 con la fila creada.
+// P2: crea una obligación/deuda en estado 'pending'.
 app.post('/payments', requireRole('finanzas', 'admin'), async (req, res) => {
-  res.status(501).json({ error: 'TODO: implementar POST /payments' });
+  const { studentId, concept, amount } = req.body || {};
+  if (!studentId || !concept || amount == null) {
+    return res.status(400).json({ error: 'studentId, concept y amount son obligatorios' });
+  }
+  if (isNaN(Number(amount)) || Number(amount) < 0) {
+    return res.status(400).json({ error: 'amount debe ser un número no negativo' });
+  }
+  try {
+    const r = await db.query(
+      `INSERT INTO payments (student_id, concept, amount) VALUES ($1, $2, $3) RETURNING *`,
+      [studentId, concept, amount]
+    );
+    return res.status(201).json(r.rows[0]);
+  } catch (err) {
+    log.error('Error al crear obligación de pago', { correlationId: req.correlationId, err: err.message });
+    return res.status(500).json({ error: 'No se pudo registrar el pago' });
+  }
 });
 
-// TODO(payments): Listar pagos con filtros opcionales ?status= y ?studentId=.
+// P3: lista pagos con filtros opcionales ?status= y ?studentId=.
 app.get('/payments', requireRole('finanzas', 'admin', 'director'), async (req, res) => {
-  res.status(501).json({ error: 'TODO: implementar GET /payments' });
+  const { status, studentId } = req.query;
+  const conds = [];
+  const params = [];
+  if (status) { params.push(status); conds.push(`status = $${params.length}`); }
+  if (studentId) { params.push(studentId); conds.push(`student_id = $${params.length}`); }
+  const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
+  try {
+    const r = await db.query(`SELECT * FROM payments ${where} ORDER BY created_at DESC`, params);
+    return res.json(r.rows);
+  } catch (err) {
+    log.error('Error al listar pagos', { correlationId: req.correlationId, err: err.message });
+    return res.status(500).json({ error: 'No se pudieron consultar los pagos' });
+  }
 });
 
-// TODO(payments): Confirmar pago y publicar PaymentConfirmed.
-//   1. UPDATE payments SET status='confirmed', confirmed_at=now()
-//      WHERE id=:id AND status='pending' RETURNING *  (409 si no aplica).
-//   2. buildEvent(EVENT_TYPES.PaymentConfirmed, { entityId: student_id, correlationId, data }).
-//   3. await mq.publish(event); responder con { payment, eventId }.
+// P4: confirma un pago 'pending' (409 si no aplica) y publica PaymentConfirmed.
 app.post('/payments/:id/confirm', requireRole('finanzas', 'admin'), async (req, res) => {
-  res.status(501).json({ error: 'TODO: implementar POST /payments/:id/confirm' });
+  try {
+    const r = await db.query(
+      `UPDATE payments SET status='confirmed', confirmed_at=now()
+       WHERE id=$1 AND status='pending' RETURNING *`,
+      [req.params.id]
+    );
+    if (!r.rowCount) {
+      return res.status(409).json({ error: 'Pago inexistente o ya confirmado' });
+    }
+    const payment = r.rows[0];
+    const event = buildEvent(EVENT_TYPES.PaymentConfirmed, {
+      entityId: payment.student_id,
+      correlationId: req.correlationId,
+      data: { paymentId: payment.id, concept: payment.concept, amount: Number(payment.amount) },
+    });
+    await mq.publish(event);
+    log.info('Pago confirmado y evento publicado', {
+      paymentId: payment.id, studentId: payment.student_id,
+      eventId: event.eventId, correlationId: req.correlationId,
+    });
+    return res.json({ payment, eventId: event.eventId });
+  } catch (err) {
+    log.error('Error al confirmar pago', {
+      paymentId: req.params.id, correlationId: req.correlationId, err: err.message,
+    });
+    return res.status(500).json({ error: 'No se pudo confirmar el pago' });
+  }
 });
 
 // ---------- Arranque (ANDAMIAJE — no tocar) ----------

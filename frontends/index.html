@@ -7,23 +7,126 @@
   <link rel="stylesheet" href="/common/styles.css" />
 </head>
 <body>
-  <header><h1>🏫 CampusConnect 360</h1><span class="role">Ecosistema de integración para una red de colegios</span></header>
-  <div class="container">
+  <header>
+    <div class="brand">
+      <span class="brand-mark">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>
+      </span>
+      <span class="brand-name">CampusConnect 360</span>
+    </div>
+    <div>
+      <span class="status-pill"><span class="dot"></span>Ecosistema activo</span>
+      <span class="role">Red de colegios</span>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- Hero / flujo de operación -->
+    <section class="hero">
+      <h2>Un día de operación, de punta a punta</h2>
+      <p>Cada portal representa un <span class="accent-ind">actor</span> del colegio. Sus acciones publican
+        eventos vía <span class="accent-amb">RabbitMQ</span> que sincronizan todo el ecosistema en tiempo real.</p>
+
+      <div class="flow">
+        <p class="flow-title">Flujo de integración recomendado</p>
+        <div class="flow-steps">
+          <span class="flow-step a-indigo">1. Académico</span>
+          <span class="flow-arrow"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg></span>
+          <span class="flow-step a-sky">2. Financiero</span>
+          <span class="flow-arrow"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg></span>
+          <span class="flow-step a-emerald">3. Docente / Bienestar</span>
+          <span class="flow-arrow"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg></span>
+          <span class="flow-step a-purple">4. Dashboard Directivo</span>
+        </div>
+      </div>
+
+      <div class="cred">
+        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+        <span>Todos los usuarios de demostración usan la clave: <b>campus123</b></span>
+      </div>
+    </section>
+
+    <!-- Grid de portales -->
     <div class="grid">
-      <a class="card" href="/academico/" style="text-decoration:none;color:inherit">
-        <h2>🎓 Portal Académico</h2><p class="muted">Registro de estudiantes y matrículas.</p></a>
-      <a class="card" href="/financiero/" style="text-decoration:none;color:inherit">
-        <h2>💳 Portal Financiero</h2><p class="muted">Obligaciones y confirmación de pagos.</p></a>
-      <a class="card" href="/docente/" style="text-decoration:none;color:inherit">
-        <h2>📋 Portal Docente / Bienestar</h2><p class="muted">Asistencia e incidentes.</p></a>
-      <a class="card" href="/dashboard/" style="text-decoration:none;color:inherit">
-        <h2>📊 Dashboard Directivo</h2><p class="muted">Indicadores y resiliencia.</p></a>
+      <a class="portal a-indigo" href="/academico/" target="_blank" rel="noopener">
+        <div>
+          <div class="portal-head">
+            <span class="icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 14l9-5-9-5-9 5 9 5zm0 0l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14zm-4 6v-7.5l4-2.222"></path></svg></span>
+            <h3>Portal Académico</h3>
+          </div>
+          <p>Registro y gestión administrativa de alumnos, con control centralizado de matrículas.</p>
+        </div>
+        <div class="portal-actions">
+          <span class="btn-enter">Entrar como Secretaría</span>
+          <span class="pub-tag">pub: StudentEnrolled</span>
+        </div>
+      </a>
+
+      <a class="portal a-sky" href="/financiero/" target="_blank" rel="noopener">
+        <div>
+          <div class="portal-head">
+            <span class="icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg></span>
+            <h3>Portal Financiero</h3>
+          </div>
+          <p>Generación de obligaciones y conciliación de pagos con confirmación de transacciones.</p>
+        </div>
+        <div class="portal-actions">
+          <span class="btn-enter">Entrar como Finanzas</span>
+          <span class="pub-tag">pub: PaymentConfirmed</span>
+        </div>
+      </a>
+
+      <a class="portal a-emerald" href="/docente/" target="_blank" rel="noopener">
+        <div>
+          <div class="portal-head">
+            <span class="icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg></span>
+            <h3>Portal Docente / Bienestar</h3>
+          </div>
+          <p>Registro diario de asistencias y reporte ágil de incidentes académicos o conductuales.</p>
+        </div>
+        <div class="portal-actions">
+          <span class="btn-enter">Entrar como Docente</span>
+          <span class="pub-tag">pub: Attendance / Incident</span>
+        </div>
+      </a>
+
+      <a class="portal a-purple" href="/dashboard/" target="_blank" rel="noopener">
+        <div>
+          <div class="portal-head">
+            <span class="icon"><svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 8v8m-4-5v5m-4-2v2m-2 4h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg></span>
+            <h3>Dashboard Directivo</h3>
+          </div>
+          <p>Consolidado de indicadores, control analítico global (CQRS) y demostración de resiliencia.</p>
+        </div>
+        <div class="portal-actions">
+          <span class="btn-enter">Entrar como Admin / Director</span>
+          <span class="pub-tag">consume: todo (CQRS)</span>
+        </div>
+      </a>
     </div>
-    <div class="card" style="margin-top:16px">
-      <h2>Recursos técnicos</h2>
-      <p class="muted">Gateway: <code>http://localhost:8080</code> · RabbitMQ UI: <code>http://localhost:15672</code> (guest/guest)</p>
-      <p class="muted">Swagger por servicio: <code>/api/&lt;servicio&gt;/docs</code> a través del gateway.</p>
-    </div>
-  </div>
+
+    <!-- Recursos técnicos -->
+    <section class="card" style="margin-top:24px">
+      <h2>Recursos técnicos e integración</h2>
+      <div class="tech">
+        <div class="tech-item">
+          <span class="k">API Gateway</span>
+          <a href="http://localhost:8080">http://localhost:8080</a>
+        </div>
+        <div class="tech-item">
+          <span class="k">RabbitMQ (consola) <span class="warn">guest / guest</span></span>
+          <a href="http://localhost:15672">http://localhost:15672</a>
+        </div>
+        <div class="tech-item">
+          <span class="k">Swagger por servicio</span>
+          /api/&lt;servicio&gt;/docs
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p>CampusConnect 360 &copy; 2026 — Orquestación de servicios desacoplados por eventos.</p>
+  </footer>
 </body>
 </html>
