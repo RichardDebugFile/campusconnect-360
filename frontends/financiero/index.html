@@ -3,85 +3,206 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Portal Financiero · CampusConnect 360</title>
+  <title>Portal Financiero - CampusConnect 360</title>
   <link rel="stylesheet" href="/common/styles.css" />
 </head>
 <body>
   <header>
     <h1>Portal Financiero / Pagos</h1>
-    <div><span class="role" id="who"></span> <button class="secondary" onclick="Auth.clear();location.reload()">Salir</button></div>
+    <div>
+      <span class="role" id="who"></span>
+      <button class="secondary" onclick="Auth.clear();location.reload()">Salir</button>
+    </div>
   </header>
+
   <div class="container" id="app"></div>
   <div id="gate"></div>
 
   <script src="/common/api.js"></script>
   <script>
+    // ========================================================================
+    // HU-P3 - Portal Financiero
+    // Crear obligaciones, ver pendientes y confirmar. La confirmacion dispara
+    // en cascada la solvencia del estudiante en Academico + notificaciones +
+    // el dashboard, gracias al evento PaymentConfirmed que publica el backend.
+    // ========================================================================
+
+    const money = (n) => '$' + Number(n).toFixed(2);
+
+    // Estado en memoria de la sesion (evita releer todo del backend).
+    const state = {
+      students: [],
+      pending: [],
+      confirmed: [],
+      filter: '',
+    };
+
     function init() {
       document.getElementById('who').textContent = Auth.name + ' (' + Auth.role + ')';
       document.getElementById('app').innerHTML = `
         <div class="grid">
           <div class="card">
-            <h2>Generar obligación de pago</h2>
-            <label>Estudiante</label><select id="stu"></select>
-            <label>Concepto</label><input id="concept" value="Matrícula 2026" />
-            <label>Monto (USD)</label><input id="amount" type="number" value="150" />
-            <button id="crear">Crear deuda</button>
+            <h2>Nueva obligacion</h2>
+            <label>Estudiante</label>
+            <select id="stu"></select>
+            <label>Concepto</label>
+            <input id="concept" value="Matricula 2026" maxlength="200" />
+            <label>Monto (USD)</label>
+            <input id="amount" type="number" min="0.01" step="0.01" value="150.00" />
+            <button id="crear">Crear obligacion</button>
+            <p class="muted" id="crear-hint">Queda registrada en estado <b>pending</b>.</p>
           </div>
+
           <div class="card">
-            <h2>Pagos pendientes</h2>
-            <div id="pending"><p class="muted">Cargando...</p></div>
+            <h2>Resumen de cartera</h2>
+            <p>Pendientes: <span class="badge pending" id="sum-pend">0</span></p>
+            <p>Confirmados: <span class="badge confirmed" id="sum-conf">0</span></p>
+            <label>Filtrar por estudiante</label>
+            <input id="filter" placeholder="STU-0001" />
+            <button class="secondary" id="refrescar">Refrescar</button>
           </div>
         </div>
+
+        <div class="card" style="margin-top:16px">
+          <h2>Pagos pendientes</h2>
+          <div id="pending"><p class="muted">Cargando...</p></div>
+        </div>
+
         <div class="card" style="margin-top:16px">
           <h2>Pagos confirmados</h2>
           <div id="confirmed"></div>
         </div>`;
-      document.getElementById('crear').onclick = crear;
-      cargarEstudiantes(); cargarPagos();
+
+      document.getElementById('crear').onclick = crearObligacion;
+      document.getElementById('refrescar').onclick = cargarPagos;
+      document.getElementById('filter').addEventListener('input', (e) => {
+        state.filter = e.target.value.trim();
+        pintarListas();
+      });
+
+      cargarEstudiantes();
+      cargarPagos();
     }
 
+    // ------------------------------------------------------------------------
+    // Carga de datos
+    // ------------------------------------------------------------------------
     async function cargarEstudiantes() {
       try {
         const rows = await api('GET', '/academic/students');
-        document.getElementById('stu').innerHTML = rows.map(s =>
-          `<option value="${s.id}">${s.id} · ${s.first_name} ${s.last_name}</option>`).join('');
-      } catch (e) { toast(e.message, 'err'); }
-    }
-
-    async function crear() {
-      try {
-        await api('POST', '/payments/payments', {
-          studentId: stu.value, concept: concept.value, amount: Number(amount.value),
-        });
-        toast('Obligación creada');
-        cargarPagos();
-      } catch (e) { toast(e.message, 'err'); }
+        state.students = rows;
+        document.getElementById('stu').innerHTML = rows.length
+          ? rows.map(s => `<option value="${s.id}">${s.id} - ${s.first_name} ${s.last_name}</option>`).join('')
+          : '<option value="">(no hay estudiantes registrados)</option>';
+      } catch (e) {
+        toast('No se pudo cargar estudiantes: ' + e.message, 'err');
+      }
     }
 
     async function cargarPagos() {
       try {
-        const pend = await api('GET', '/payments/payments?status=pending');
-        const conf = await api('GET', '/payments/payments?status=confirmed');
-        document.getElementById('pending').innerHTML = pend.length ? `
-          <table><thead><tr><th>ID</th><th>Estudiante</th><th>Concepto</th><th>Monto</th><th></th></tr></thead>
-          <tbody>${pend.map(p => `<tr><td>${p.id}</td><td>${p.student_id}</td><td>${p.concept}</td>
-          <td>$${p.amount}</td><td><button class="ok" onclick="confirmar(${p.id})">Confirmar pago</button></td></tr>`).join('')}
-          </tbody></table>` : '<p class="muted">Sin pagos pendientes.</p>';
-        document.getElementById('confirmed').innerHTML = conf.length ? `
-          <table><thead><tr><th>ID</th><th>Estudiante</th><th>Concepto</th><th>Monto</th><th>Confirmado</th></tr></thead>
-          <tbody>${conf.map(p => `<tr><td>${p.id}</td><td>${p.student_id}</td><td>${p.concept}</td>
-          <td>$${p.amount}</td><td class="muted">${new Date(p.confirmed_at).toLocaleString()}</td></tr>`).join('')}
-          </tbody></table>` : '<p class="muted">Sin pagos confirmados.</p>';
-      } catch (e) { toast(e.message, 'err'); }
+        const [pend, conf] = await Promise.all([
+          api('GET', '/payments/payments?status=pending'),
+          api('GET', '/payments/payments?status=confirmed'),
+        ]);
+        state.pending = pend;
+        state.confirmed = conf;
+        pintarListas();
+      } catch (e) {
+        toast('Fallo al cargar pagos: ' + e.message, 'err');
+      }
     }
 
-    async function confirmar(id) {
-      try {
-        await api('POST', '/payments/payments/' + id + '/confirm');
-        toast('Pago confirmado · evento PaymentConfirmed publicado');
-        cargarPagos();
-      } catch (e) { toast(e.message, 'err'); }
+    // ------------------------------------------------------------------------
+    // Renderizado (aplica filtro cliente-side sobre el estado en memoria)
+    // ------------------------------------------------------------------------
+    function pintarListas() {
+      const f = state.filter.toLowerCase();
+      const filtrar = (rows) => f
+        ? rows.filter(p => (p.student_id || '').toLowerCase().includes(f))
+        : rows;
+
+      const pend = filtrar(state.pending);
+      const conf = filtrar(state.confirmed);
+
+      const totalPend = pend.reduce((acc, p) => acc + Number(p.amount), 0);
+      const totalConf = conf.reduce((acc, p) => acc + Number(p.amount), 0);
+
+      document.getElementById('sum-pend').textContent =
+        `${pend.length} obligacion(es) - ${money(totalPend)}`;
+      document.getElementById('sum-conf').textContent =
+        `${conf.length} pago(s) - ${money(totalConf)}`;
+
+      document.getElementById('pending').innerHTML = pend.length
+        ? `<table>
+            <thead><tr><th>ID</th><th>Estudiante</th><th>Concepto</th><th>Monto</th><th>Creado</th><th></th></tr></thead>
+            <tbody>${pend.map(p => `
+              <tr>
+                <td>${p.id}</td>
+                <td>${p.student_id}</td>
+                <td>${p.concept}</td>
+                <td>${money(p.amount)}</td>
+                <td class="muted">${new Date(p.created_at).toLocaleString()}</td>
+                <td><button class="ok" onclick="confirmar(${p.id}, this)">Confirmar</button></td>
+              </tr>`).join('')}
+            </tbody></table>`
+        : '<p class="muted">Sin obligaciones pendientes.</p>';
+
+      document.getElementById('confirmed').innerHTML = conf.length
+        ? `<table>
+            <thead><tr><th>ID</th><th>Estudiante</th><th>Concepto</th><th>Monto</th><th>Confirmado</th></tr></thead>
+            <tbody>${conf.map(p => `
+              <tr>
+                <td>${p.id}</td>
+                <td>${p.student_id}</td>
+                <td>${p.concept}</td>
+                <td>${money(p.amount)}</td>
+                <td class="muted">${new Date(p.confirmed_at).toLocaleString()}</td>
+              </tr>`).join('')}
+            </tbody></table>`
+        : '<p class="muted">Sin pagos confirmados aun.</p>';
     }
+
+    // ------------------------------------------------------------------------
+    // Acciones
+    // ------------------------------------------------------------------------
+    async function crearObligacion() {
+      const btn = document.getElementById('crear');
+      const studentId = document.getElementById('stu').value;
+      const concept   = document.getElementById('concept').value.trim();
+      const amount    = Number(document.getElementById('amount').value);
+
+      if (!studentId) return toast('Selecciona un estudiante', 'err');
+      if (!concept)   return toast('El concepto no puede estar vacio', 'err');
+      if (!(amount > 0)) return toast('El monto debe ser mayor a 0', 'err');
+
+      btn.disabled = true;
+      try {
+        await api('POST', '/payments/payments', { studentId, concept, amount });
+        toast('Obligacion creada correctamente');
+        await cargarPagos();
+      } catch (e) {
+        toast('No se pudo crear: ' + e.message, 'err');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function confirmar(id, btn) {
+      // Deshabilitar el boton evita el doble-click que genera un 409 inutil.
+      if (btn) btn.disabled = true;
+      try {
+        const r = await api('POST', '/payments/payments/' + id + '/confirm');
+        toast('Pago #' + id + ' confirmado - evento PaymentConfirmed publicado (' + r.eventId + ')');
+        await cargarPagos();
+      } catch (e) {
+        toast('No se pudo confirmar: ' + e.message, 'err');
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    // Expone confirmar al scope global (se llama desde el onclick inline).
+    window.confirmar = confirmar;
 
     renderLogin('gate', 'Portal Financiero', 'finanzas', init, ['finanzas', 'admin']);
   </script>
